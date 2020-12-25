@@ -2,32 +2,89 @@ import tensorflow as tf
 import tensorflow.nn as nn
 
 
-def conv_layer(in_channels, out_channels, kernel_size, stride=1, dilation=1, groups=1):
-    padding = int((kernel_size - 1) / 2) * dilation
-    return nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding=padding, bias=True, dilation=dilation, groups=groups)
+def conv_layer(
+    inputs,
+    n_channels=8,
+    kernel_size=kernel_size,
+    strides=strides,
+    dilation_rate=dilation_rate,
+    padding='SAME',
+    data_format='NHWC',
+    use_bias=True,
+    kernel_initializer=tf.variance_scaling_initializer(),
+    bias_initializer=tf.zeros_initializer(),
+    trainable=True
+):
+    if data_format not in ['NHWC', 'NCHW']:
+        raise ValueError("Unknown data format: `%s` (accepted: ['NHWC', 'NCHW'])" % data_format)
 
-def norm(norm_type, nc):
-    norm_type = norm_type.lower()
-    if norm_type == 'batch':
-        layer = nn.BatchNorm2d(nc, affine=True)
-    elif norm_type == 'instance':
-        layer = nn.InstanceNorm2d(nc, affine=False)
-    else:
-        raise NotImplementedError('normalization layer [{:s}] is not found'.format(norm_type))
-    return layer
+    if padding.upper() not in ['SAME', 'VALID']:
+        raise ValueError("Unknown padding: `%s` (accepted: ['SAME', 'VALID'])" % padding.upper())
+
+    output = tf.layers.conv2d(
+        inputs,
+        filters=n_channels,
+        kernel_size=kernel_size,
+        strides=strides,
+        padding=padding,
+        dilation_rate=dilation_rate,
+        data_format='channels_last' if data_format == 'NHWC' else 'channels_first',
+        use_bias=use_bias,
+        kernel_initializer=kernel_initializer,
+        bias_initializer=bias_initializer,
+        trainable=trainable,
+        activation=None
+    )
+
+    return output
 
 
-def pad(pad_type, padding):
-    pad_type = pad_type.lower()
-    if padding == 0:
-        return None
-    if pad_type == 'reflect':
-        layer = nn.ReflectionPad2d(padding)
-    elif pad_type == 'replicate':
-        layer = nn.ReplicationPad2d(padding)
-    else:
-        raise NotImplementedError('padding layer [{:s}] is not implemented'.format(pad_type))
-    return layer
+def norm(
+    inputs,
+    decay=0.999,
+    epsilon=0.001,
+    scale=False,
+    center=True,
+    is_training=True,
+    data_format='NHWC',
+    param_initializers=None
+):
+    """Adds a Batch Normalization layer."""
+
+    if data_format not in ['NHWC', 'NCHW']:
+        raise ValueError("Unknown data format: `%s` (accepted: ['NHWC', 'NCHW'])" % data_format)
+
+    input_shape = inputs.get_shape()
+    input_rank = input_shape.ndims
+    input_channels = input_shape[1]
+
+    if input_rank == 2:
+
+        if data_format == 'NCHW':
+            new_shape = [-1, input_channels, 1, 1]
+        else:
+            new_shape = [-1, 1, 1, input_channels]
+
+        inputs = tf.reshape(inputs, new_shape)
+
+    output = tf.contrib.layers.batch_norm(
+        inputs,
+        decay=decay,
+        scale=scale,
+        epsilon=epsilon,
+        is_training=is_training,
+        trainable=is_training,
+        fused=True,
+        data_format=data_format,
+        center=center,
+        param_initializers=param_initializers
+    )
+
+    if input_rank == 2:
+        output = tf.reshape(output, [-1, input_channels])
+
+    return output
+
 
 def get_valid_padding(kernel_size, dilation):
     kernel_size = kernel_size + (kernel_size - 1) * (dilation - 1)
@@ -35,126 +92,85 @@ def get_valid_padding(kernel_size, dilation):
     return padding
 
 
-def conv_block(in_nc, out_nc, kernel_size, stride=1, dilation=1, groups=1, bias=True,
-               pad_type='zero', norm_type=None, act_type='relu'):
+def pad(inputs, paddings, mode='CONSTANT', name='padding', constant_values=0):
 
-    padding = get_valid_padding(kernel_size, dilation)
-    p = pad(pad_type, padding) if pad_type and pad_type != 'zero' else None
-    padding = padding if pad_type == 'zero' else 0
+    if mode.upper() not in ['CONSTANT', 'REFLECT', 'SYMMETRIC']:
+        raise ValueError("Unknown padding mode: `%s` (accepted: ['CONSTANT', 'REFLECT', 'SYMMETRIC'])" % mode)
 
-    c = nn.Conv2d(in_nc, out_nc, kernel_size=kernel_size, stride=stride, padding=padding,
-            dilation=dilation, bias=bias, groups=groups)
-    a = activation(act_type) if act_type else None
-    n = norm(norm_type, out_nc) if norm_type else None
-    return sequential(p, c, n, a)
+    output = tf.pad(inputs, paddings=paddings, mode=mode, name=name, constant_values=constant_values)
+
+    return output
 
 
-def activation(act_type, inplace=True, neg_slope=0.2, n_prelu=1):
+def activation(inputs, act_type, alpha=0.2, n_prelu=1):
     act_type = act_type.lower()
     if act_type == 'relu':
-        layer = nn.ReLU(inplace)
+        output = tf.nn.relu(inputs)
     elif act_type == 'lrelu':
-        layer = nn.LeakyReLU(neg_slope, inplace)
-    elif act_type == 'prelu':
-        layer = nn.PReLU(num_parameters=n_prelu, init=neg_slope)
+        output = tf.nn.leaky_relu(inputs, alpha=alpha)
     else:
         raise NotImplementedError('activation layer [{:s}] is not found'.format(act_type))
-    return layer
+    return output
 
 
-class ShortcutBlock(nn.Module):
-    #Elementwise sum the output of a submodule to its input
-    def __init__(self, submodule):
-        super(ShortcutBlock, self).__init__()
-        self.sub = submodule
+def conv_block(inputs, out_nc, kernel_size, stride=1, dilation=1, groups=1, bias=True,
+               pad_type='zero', norm_type=None, act_type='relu'):
 
-    def forward(self, x):
-        output = x + self.sub(x)
-        return output
+    paddings = get_valid_padding(kernel_size, dilation)
+    net = pad(pad_type, paddings) if pad_type and pad_type != 'zero' else inputs
+    paddings = paddings if pad_type == 'zero' else 0
 
-    def __repr__(self):
-        tmpstr = 'Identity + \n|'
-        modstr = self.sub.__repr__().replace('\n', '\n|')
-        tmpstr = tmpstr + modstr
-        return tmpstr
+    net = tf.layers.conv2d(net, out_nc, kernel_size, strides=(stride, stride), padding=paddings, 
+                                                     dilation_rate=(dilation, dilation), use_bias=bias, groups=groups)
+    net = activation(net, act_type) if act_type else net
+    net = norm(net) if norm_type else net
+    return net
 
 
-def sequential(*args):
-    if len(args) == 1:
-        if isinstance(args[0], OrderedDict):
-            raise NotImplementedError('sequential does not support OrderedDict input.')
-        return args[0]
-    modules = []
-    for module in args:
-        if isinstance(module, nn.Sequential):
-            for submodule in module.children():
-                modules.append(submodule)
-        elif isinstance(module, nn.Module):
-            modules.append(module)
-    return nn.Sequential(*modules)
+def _ResBlock_32(inputs, nc=64):
+    c1 = conv_layer(inputs, n_channels=nc, kernel_size=3, strides=1, dilation_rate=1)
+    output1 = activation(c1, act_type="lrelu")
+    d1 = conv_layer(output1, n_channels=nc//2, kernel_size=3, strides=1, dilation_rate=1)
+    d2 = conv_layer(output1, n_channels=nc//2, kernel_size=3, strides=1, dilation_rate=2)
+    d3 = conv_layer(output1, n_channels=nc//2, kernel_size=3, strides=1, dilation_rate=3)
+    d4 = conv_layer(output1, n_channels=nc//2, kernel_size=3, strides=1, dilation_rate=4)
+    d5 = conv_layer(output1, n_channels=nc//2, kernel_size=3, strides=1, dilation_rate=5)
+    d6 = conv_layer(output1, n_channels=nc//2, kernel_size=3, strides=1, dilation_rate=6)
+    d7 = conv_layer(output1, n_channels=nc//2, kernel_size=3, strides=1, dilation_rate=7)
+    d8 = conv_layer(output1, n_channels=nc//2, kernel_size=3, strides=1, dilation_rate=8)
+
+    add1 = d1 + d2
+    add2 = add1 + d3
+    add3 = add2 + d4
+    add4 = add3 + d5
+    add5 = add4 + d6
+    add6 = add5 + d7
+    add7 = add6 + d8
+
+    combine = tf.concat(3, [d1, add1, add2, add3, add4, add5, add6, add7])
+    c2 = activation(combine, act_type="lrelu")
+    output2 = conv_layer(c2, n_channels=nc, kernel_size=1, strides=1, dilation_rate=1)
+    output = input + tf.multiply(output2, 0.2)
+
+    return output
+
+def RRBlock_32(inputs):
+    out = _ResBlock_32(inputs)
+    out = _ResBlock_32(out)
+    out = _ResBlock_32(out)
+
+    return inputs + tf.multiply(out, 0.2)
 
 
-class _ResBlock_32(nn.Module):
-    def __init__(self, nc=64):
-        super(_ResBlock_32, self).__init__()
-        self.c1 = conv_layer(nc, nc, 3, 1, 1)
-        self.d1 = conv_layer(nc, nc//2, 3, 1, 1)  # rate=1
-        self.d2 = conv_layer(nc, nc//2, 3, 1, 2)  # rate=2
-        self.d3 = conv_layer(nc, nc//2, 3, 1, 3)  # rate=3
-        self.d4 = conv_layer(nc, nc//2, 3, 1, 4)  # rate=4
-        self.d5 = conv_layer(nc, nc//2, 3, 1, 5)  # rate=5
-        self.d6 = conv_layer(nc, nc//2, 3, 1, 6)  # rate=6
-        self.d7 = conv_layer(nc, nc//2, 3, 1, 7)  # rate=7
-        self.d8 = conv_layer(nc, nc//2, 3, 1, 8)  # rate=8
-        self.act = activation('lrelu')
-        self.c2 = conv_layer(nc * 4, nc, 1, 1, 1)  # 256-->64
+def upconv_block(inputs, out_channels, upscale_factor=2, kernel_size=3, stride=1, act_type='relu'):
+    output = tf.keras.layers.UpSampling2D(size=(upscale_factor, upscale_factor), interpolation='nearest')(inputs)
+    output = conv_layer(output, out_channels, kernel_size=kernel_size, strides=stride)
+    output = activation(output, act_type=act_type)
 
-    def forward(self, input):
-        output1 = self.act(self.c1(input))
-        d1 = self.d1(output1)
-        d2 = self.d2(output1)
-        d3 = self.d3(output1)
-        d4 = self.d4(output1)
-        d5 = self.d5(output1)
-        d6 = self.d6(output1)
-        d7 = self.d7(output1)
-        d8 = self.d8(output1)
+    return output
 
-        add1 = d1 + d2
-        add2 = add1 + d3
-        add3 = add2 + d4
-        add4 = add3 + d5
-        add5 = add4 + d6
-        add6 = add5 + d7
-        add7 = add6 + d8
+def pixelshuffle_block(inputs, out_channels, upscale_factor=2, kernel_size=3, stride=1):
+    output = conv_layer(inputs, n_channels=out_channels * (upscale_factor ** 2), kernel_size=kernel_size, strides=stride)
+    output = tf.nn.depth_to_space(output, block_size=upscale_factor)
 
-        combine = torch.cat([d1, add1, add2, add3, add4, add5, add6, add7], 1)
-        output2 = self.c2(self.act(combine))
-        output = input + output2.mul(0.2)
-
-        return output
-
-class RRBlock_32(nn.Module):
-    def __init__(self):
-        super(RRBlock_32, self).__init__()
-        self.RB1 = _ResBlock_32()
-        self.RB2 = _ResBlock_32()
-        self.RB3 = _ResBlock_32()
-
-    def forward(self, input):
-        out = self.RB1(input)
-        out = self.RB2(out)
-        out = self.RB3(out)
-        return out.mul(0.2) + input
-
-def upconv_block(in_channels, out_channels, upscale_factor=2, kernel_size=3, stride=1, act_type='relu'):
-    upsample = nn.Upsample(scale_factor=upscale_factor, mode='nearest')
-    conv = conv_layer(in_channels, out_channels, kernel_size, stride)
-    act = activation(act_type)
-    return sequential(upsample, conv, act)
-
-def pixelshuffle_block(in_channels, out_channels, upscale_factor=2, kernel_size=3, stride=1):
-    conv = conv_layer(in_channels, out_channels * (upscale_factor ** 2), kernel_size, stride)
-    pixel_shuffle = nn.PixelShuffle(upscale_factor)
-    return sequential(conv, pixel_shuffle)
-
+    return output
