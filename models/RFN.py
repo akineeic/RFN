@@ -3,17 +3,18 @@ import math
 from . import block as B
 
 def RFN(rgba, nf, nb, out_nc, upscale=4, act_type='lrelu'):
-    images = rgba[:, :, :, :3]
+    #images = rgba[:, :, :, :3]
 
     n_upscale = int(math.log(upscale, 2))
     if upscale == 3:
         n_upscale = 1
 
-    c1 = B.conv_layer(images, n_channels=nf, kernel_size=3)
-    net = tf.Identity(c1)
+    c1 = B.conv_layer(rgba, filters=nf, kernel_size=3)
+    print("Shape of c1 is: ", tf.shape(c1))
+    net = tf.identity(c1)
     for _ in range(nb):
         net = B.RRBlock_32(net)
-    net = B.conv_layer(net, n_channels=nf, kernel_size=3)
+    net = B.conv_layer(net, filters=nf, kernel_size=3)
     net += c1 
     
     if upscale == 3:
