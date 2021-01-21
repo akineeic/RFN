@@ -74,6 +74,7 @@ def standard_model_fn(
     ret = func(features, labels, mode, params)
 
     tf.add_to_collection("total_loss", ret["loss"])
+    tf.add_to_collection("psnr", ret["psnr"])
 
     train_op = None
 
@@ -148,16 +149,50 @@ def train_and_eval(
   
   estimator.train(
     input_fn = input_fn(batch_size=batch_size),
-    steps = steps
+    max_steps = steps
   )
 
-  '''
-  train_spec = tf.estimator.TrainSpec(
-      input_fn=input_fn(batch_size=batch_size),
-      max_steps=steps)
+def eval(
+        model_dir,
+        steps,
+        batch_size,
+        model_fn,
+        input_fn,
+        hparams,
+        keep_checkpoint_every_n_hours=0.5,
+        save_checkpoints_secs=180,
+        save_summary_steps=50,
+        eval_steps=20,
+        eval_start_delay_secs=10,
+        eval_throttle_secs=300,
+        sync_replicas=0,
+        task =  "test",
+        path = None):
 
-  tf.estimator.train(estimator, train_spec)
-  '''
+    run_config = tf.estimator.RunConfig(
+        keep_checkpoint_every_n_hours=keep_checkpoint_every_n_hours,
+        save_checkpoints_secs=save_checkpoints_secs,
+        save_summary_steps=save_summary_steps)
+
+    estimator = tf.estimator.Estimator(
+        model_dir=model_dir,
+        model_fn=standard_model_fn(
+            model_fn,
+            steps,
+            run_config,
+            sync_replicas=sync_replicas),
+            params=hparams, 
+            config=run_config)
+
+    print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), "  Test started...")
+    if path != None:
+        print(path)
+        output = estimator.evaluate(input_fn=input_fn(batch_size=batch_size), checkpoint_path=path)
+    else:
+        print("Loading Default Path")
+        output = estimator.evaluate(input_fn=input_fn(batch_size=batch_size))
+    print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), "  Test finished.")
+    return output 
 
 
 def colored_hook(home_dir):

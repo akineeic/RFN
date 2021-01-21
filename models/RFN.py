@@ -10,7 +10,6 @@ def RFN(rgba, nf, nb, out_nc, upscale=4, act_type='lrelu'):
         n_upscale = 1
 
     c1 = B.conv_layer(rgba, filters=nf, kernel_size=3)
-    print("Shape of c1 is: ", tf.shape(c1))
     net = tf.identity(c1)
     for _ in range(nb):
         net = B.RRBlock_32(net)
