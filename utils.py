@@ -19,7 +19,10 @@ class TrainingHook(tf.train.SessionRunHook):
   def before_run(self, run_context):
     graph = tf.get_default_graph()
     return tf.train.SessionRunArgs(
-        {"loss": graph.get_collection("total_loss")[0]})
+        {"loss": graph.get_collection("total_loss")[0],
+         "loss_l1": graph.get_collection("loss_l1")[0],
+         "loss_l2": graph.get_collection("loss_l2")[0],
+        })
 
   def after_run(self, run_context, run_values):
     step = run_context.session.run(tf.train.get_global_step())
@@ -38,11 +41,13 @@ class TrainingHook(tf.train.SessionRunHook):
     h, m = divmod(m, 60)
     eta = "%d:%02d:%02d" % (h, m, s)
 
-    print("%.2f%% (%d/%d): loss:%.3e time:%.3f  end:%s (%s)" % (
+    print("%.2f%% (%d/%d): loss:%.3e loss_l1:%.3e loss_l2:%.3e time:%.3f  end:%s (%s)" % (
         step * 100.0 / self.steps,
         step,
         self.steps,
         run_values.results["loss"],
+        run_values.results["loss_l1"],
+        run_values.results["loss_l2"],
         now - self.last_time,
         time.strftime("%a %d %H:%M:%S", time.localtime(time.time() + eta_time)),
         eta))
@@ -75,6 +80,8 @@ def standard_model_fn(
 
     tf.add_to_collection("total_loss", ret["loss"])
     tf.add_to_collection("psnr", ret["psnr"])
+    tf.add_to_collection("loss_l1", ret["loss_l1"])
+    tf.add_to_collection("loss_l2", ret["loss_l2"])
 
     train_op = None
 

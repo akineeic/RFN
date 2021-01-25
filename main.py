@@ -127,20 +127,24 @@ def model_fn(features, labels, mode, hparams):
   is_training = (mode == tf.estimator.ModeKeys.TRAIN)
 
   loss_l1 = 0
+  loss_l2 = 0
 
   labels = features[1]
   with tf.variable_scope("RFN"):
     sr_img = RFN(features[0], nf=64, nb=24, out_nc=3)
-    loss_l1 += tf.reduce_mean(tf.abs(sr_img - labels), axis=[1, 2, 3])
+    loss_l1 += tf.reduce_mean(tf.abs(sr_img - labels))
+    loss_l2 += tf.reduce_mean(tf.square(sr_img - labels))
 
   sr_img = tf.ceil(tf.clip_by_value(sr_img, 0, 1.0) * 255)
   labels = tf.ceil(tf.clip_by_value(labels, 0, 1.0) * 255)
   psnr = tf.image.psnr(sr_img, labels, max_val=255)
 
-  loss = tf.reduce_mean(loss_l1)
+  loss = loss_l1 / 2 + loss_l2 / 2
 
   return {
     "loss": loss,
+    "loss_l1": loss_l1,
+    "loss_l2": loss_l2,
     "psnr": psnr,
     "predictions": {
     },
