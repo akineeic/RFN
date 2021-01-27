@@ -158,7 +158,7 @@ def RRBlock_32(inputs):
 
 
 def upconv_block(inputs, out_channels, upscale_factor=2, kernel_size=3, stride=1, act_type='relu'):
-    output = tf.keras.layers.UpSampling2D(size=(upscale_factor, upscale_factor))(inputs)
+    output = tf.keras.layers.UpSampling2D(size=(upscale_factor, upscale_factor), interpolation='nearest')(inputs)
     output = conv_layer(output, out_channels, kernel_size=kernel_size, strides=stride)
     output = activation(output, act_type=act_type)
 

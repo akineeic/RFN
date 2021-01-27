@@ -6,6 +6,7 @@ import utils
 import argparse
 import tensorflow as tf
 from models.RFN import RFN
+import logging
 
 parser = argparse.ArgumentParser(description="RFN")
 parser.add_argument("--batch_size", type=int, default=8,
@@ -32,6 +33,20 @@ args = parser.parse_args()
 print(args)
 
 os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+
+
+# get TF logger
+log = logging.getLogger('tensorflow')
+log.setLevel(logging.DEBUG)
+ 
+# create formatter and add it to the handlers
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+ 
+# create file handler which logs even debug messages
+fh = logging.FileHandler(args.model_dir + 'tensorflow.log')
+fh.setLevel(logging.DEBUG)
+fh.setFormatter(formatter)
+log.addHandler(fh)
 
 
 def create_input_fn(batch_size):
@@ -149,6 +164,7 @@ def model_fn(features, labels, mode, hparams):
     "predictions": {
     },
     "eval_metric_ops":{
+      "mean-psnr": tf.metrics.mean(psnr),
       "psnr": tf.contrib.metrics.streaming_concat(psnr),
     }
   }
@@ -190,23 +206,20 @@ def main(argv):
     test()
 
   else:
-    for steps in range(1, 200):
-      args.steps = steps * 2000
-      if steps % 50 == 0:
-        args.lr /= 2
+    for steps in range(1, 5):
+      args.steps = steps * 100000
+      args.lr /= 2
       hparams = _default_hparams()
       print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), " steps:", args.steps, " lr=", args.lr)
       utils.train_and_eval(
           model_dir=args.model_dir,
           model_fn=model_fn,
-          input_fn=create_input_fn,
+          create_input_fn=create_input_fn,
+          create_test_input_fn=create_test_input_fn,
           hparams=hparams,
           steps=args.steps,
           batch_size=args.batch_size,
-          save_checkpoints_secs=600,
-          eval_throttle_secs=1800,
-          eval_steps=5,
-          sync_replicas=args.sync_replicas,
+          sync_replicas=args.sync_replicas
       )
       test()
 

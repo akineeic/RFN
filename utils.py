@@ -54,7 +54,28 @@ class TrainingHook(tf.train.SessionRunHook):
 
     self.last_time = now
 
+class EvalHook(tf.train.SessionRunHook):
+  """A utility for displaying training information such as the loss, percent
+  completed, estimated finish date and time."""
 
+  def __init__(self, steps):
+    self.steps = steps
+
+  def before_run(self, run_context):
+    graph = tf.get_default_graph()
+    return tf.train.SessionRunArgs(
+        {"psnr": graph.get_collection("psnr")[0]})
+
+  def after_run(self, run_context, run_values):
+    step = run_context.session.run(tf.train.get_global_step())
+
+    print("%.2f%% (%d/%d):  Mean PSNR is %.3e " % (
+        step * 100.0 / self.steps,
+        step,
+        self.steps,
+        run_values.results["psnr"]))
+
+    self.last_time = now
 
 def standard_model_fn(
     func, steps, run_config=None, sync_replicas=0, optimizer_fn=None):
@@ -76,6 +97,7 @@ def standard_model_fn(
     """Returns model_fn for tf.estimator.Estimator."""
 
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
+    is_eval = (mode == tf.estimator.ModeKeys.EVAL)
     ret = func(features, labels, mode, params)
 
     tf.add_to_collection("total_loss", ret["loss"])
@@ -111,6 +133,9 @@ def standard_model_fn(
       optimizer = tf.contrib.estimator.clip_gradients_by_norm(optimizer, 5)
       train_op = slim.learning.create_train_op(ret["loss"], optimizer)
 
+    if is_eval:
+      training_hooks.append(EvalHook(steps))
+
     if "eval_metric_ops" not in ret:
       ret["eval_metric_ops"] = {}
 
@@ -129,20 +154,22 @@ def train_and_eval(
     steps,
     batch_size,
     model_fn,
-    input_fn,
+    create_input_fn,
+    create_test_input_fn,
     hparams,
     keep_checkpoint_every_n_hours=0.5,
-    save_checkpoints_secs=180,
-    save_summary_steps=50,
-    eval_steps=20,
+    save_checkpoints_steps=2000,
+    save_summary_steps=2000,
+    eval_steps=2000,
     eval_start_delay_secs=10,
-    eval_throttle_secs=300,
+    eval_throttle_secs=100,
     sync_replicas=0):
 
   run_config = tf.estimator.RunConfig(
       keep_checkpoint_every_n_hours=keep_checkpoint_every_n_hours,
-      save_checkpoints_secs=save_checkpoints_secs,
-      save_summary_steps=save_summary_steps)
+      save_checkpoints_steps=save_checkpoints_steps,
+      save_summary_steps=save_summary_steps,
+      keep_checkpoint_max=0)
 
   estimator = tf.estimator.Estimator(
       model_dir=model_dir,
@@ -154,10 +181,24 @@ def train_and_eval(
           params=hparams,
           config=run_config)
   
+  train_spec = tf.estimator.TrainSpec(
+      input_fn=create_input_fn(batch_size=batch_size),
+      max_steps=steps)
+
+  eval_spec = tf.estimator.EvalSpec(
+      input_fn=create_test_input_fn(batch_size=batch_size),
+      steps=eval_steps,
+      start_delay_secs=eval_start_delay_secs,
+      throttle_secs=eval_throttle_secs)
+
+  tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
+
+  '''
   estimator.train(
-    input_fn = input_fn(batch_size=batch_size),
+    input_fn = create_input_fn(batch_size=batch_size),
     max_steps = steps
   )
+  '''
 
 def eval(
         model_dir,
@@ -167,11 +208,11 @@ def eval(
         input_fn,
         hparams,
         keep_checkpoint_every_n_hours=0.5,
-        save_checkpoints_secs=180,
-        save_summary_steps=50,
-        eval_steps=20,
+        save_checkpoints_steps=2000,
+        save_summary_steps=2000,
+        eval_steps=2000,
         eval_start_delay_secs=10,
-        eval_throttle_secs=300,
+        eval_throttle_secs=100,
         sync_replicas=0,
         task =  "test",
         path = None):
