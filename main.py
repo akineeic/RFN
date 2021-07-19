@@ -6,6 +6,7 @@ import utils
 import argparse
 import tensorflow as tf
 from models.RFN import RFN
+import cv2 as cv
 
 parser = argparse.ArgumentParser(description="RFN")
 parser.add_argument("--batch_size", type=int, default=8,
@@ -26,6 +27,7 @@ parser.add_argument("--sync_replicas", type=int, default=-1)
 parser.add_argument("--gpu", type=str, default='0')
 parser.add_argument("--test", type=bool, default=False)
 parser.add_argument("--path", type=str, default=None)
+parser.add_argument("--out_dir", type=str, default="./image_out/")
 
 
 args = parser.parse_args()
@@ -137,7 +139,9 @@ def model_fn(features, labels, mode, hparams):
 
   sr_img = tf.ceil(tf.clip_by_value(sr_img, 0, 1.0) * 255)
   labels = tf.ceil(tf.clip_by_value(labels, 0, 1.0) * 255)
-  psnr = tf.image.psnr(sr_img, labels, max_val=255)
+  sr_gray = tf.image.rgb_to_grayscale(sr_img)
+  hr_gray = tf.image.rgb_to_grayscale(labels)
+  psnr = tf.image.psnr(sr_gray, hr_gray, max_val=255)
 
   loss = loss_l1 / 2 + loss_l2 / 2
 
@@ -147,13 +151,14 @@ def model_fn(features, labels, mode, hparams):
     "loss_l2": loss_l2,
     "psnr": psnr,
     "predictions": {
+      "predict": sr_img
     },
     "eval_metric_ops":{
-      "psnr": tf.contrib.metrics.streaming_concat(psnr),
+      "psnr": tf.contrib.metrics.streaming_concat(psnr)
     }
   }
 
-def test():
+def test(args):
   hparams = _default_hparams()
   output = utils.eval(
     model_dir=args.model_dir,
@@ -169,9 +174,11 @@ def test():
     task = "test",
     path = args.path
   )
-  print("PSNR is: ", output['psnr'])
-  print("===> Mean PSNR is: ", np.mean(output['psnr']))
-  print("\n")
+  
+  for pred_no, pred_dict in enumerate(output):
+    out = pred_dict["predict"]
+    out = cv.cvtColor(out, cv.COLOR_RGB2BGR)
+    cv.imwrite(args.out_dir+str(pred_no)+'.png', out)  
 
 
 def _default_hparams():
@@ -187,7 +194,7 @@ def main(argv):
   del argv
 
   if args.test:
-    test()
+    test(args)
 
   else:
     for steps in range(1, 200):
@@ -212,6 +219,4 @@ def main(argv):
 
 
 if __name__ == "__main__":
-  sys.excepthook = utils.colored_hook(
-      os.path.dirname(os.path.realpath(__file__)))
   tf.app.run()

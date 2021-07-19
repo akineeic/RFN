@@ -194,10 +194,10 @@ def eval(
     print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), "  Test started...")
     if path != None:
         print(path)
-        output = estimator.evaluate(input_fn=input_fn(batch_size=batch_size), checkpoint_path=path)
+        output = estimator.predict(input_fn=input_fn(batch_size=batch_size), checkpoint_path=path)
     else:
         print("Loading Default Path")
-        output = estimator.evaluate(input_fn=input_fn(batch_size=batch_size))
+        output = estimator.predict(input_fn=input_fn(batch_size=batch_size))
     print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()), "  Test finished.")
     return output 
 
